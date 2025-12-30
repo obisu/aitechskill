@@ -251,16 +251,10 @@ with tab2:
 # ============================================================================
 # TAB 3: RAG App
 # ============================================================================
-# ============================================================================
-# TAB 3: RAG App
-# ============================================================================
+
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
-
-    # IMPORTANT: Use Snowpark session ONLY for Cortex Search
-    from snowflake.snowpark.context import get_active_session
-    session_sp = get_active_session()
 
     prompt = st.text_input(
         "💬 Enter your query:", 
@@ -271,45 +265,35 @@ with tab3:
     if prompt:
         if st.button("🔎 Run Query", type="primary"):
             with st.spinner("🔍 Searching..."):
-
                 try:
-                    # Use Snowpark Root() to access Cortex Search Service
-                    root = Root(session_sp)
-
-                    svc = (
-                        root
-                        .databases["AITECHSKILL_DB"]
-                        .schemas["AITECHSKILL_SCHEMA"]
-                        .cortex_search_services["AITECHSKILL_SEARCH_SERVICE"]
-                    )
-
-                    resp = svc.search(
-                        query=prompt,
-                        columns=["CHUNK", "FILE_NAME", "SENTIMENT_SCORE"],
-                        limit=5
-                    ).to_json()
-
-                    json_conv = json.loads(resp)
-                    search_df = pd.json_normalize(json_conv["results"])
-
+                    search_query = f"""
+                    SELECT 
+                        REVIEW_TEXT as chunk,
+                        PRODUCT as file_name,
+                        SENTIMENT_SCORE
+                    FROM REVIEWS_WITH_SENTIMENT
+                    WHERE LOWER(REVIEW_TEXT) LIKE LOWER('%{prompt.replace("'", "''")}%')
+                    LIMIT 5
+                    """
+                    
+                    search_df = session.sql(search_query)
+                    
                     if len(search_df) > 0:
                         st.success(f"✅ Found {len(search_df)} relevant results")
-
+                        
                         for idx, row in search_df.iterrows():
                             with st.container():
                                 st.markdown(f"### Result {idx + 1}")
-                                st.info(row["CHUNK"])
-
+                                st.info(row['CHUNK'])
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     st.caption(f"📦 Product: {row['FILE_NAME']}")
                                 with col2:
                                     st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
-
                                 st.markdown("---")
                     else:
                         st.warning("No results found. Try a different query.")
-
+                        
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
 
