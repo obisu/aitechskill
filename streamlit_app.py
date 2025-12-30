@@ -251,16 +251,19 @@ with tab2:
 # ============================================================================
 # TAB 3: RAG App
 # ============================================================================
+# ============================================================================
+# TAB 3: RAG App
+# ============================================================================
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
 
-    # Use your custom Snowflake session
-    session = get_snowflake_session()
+    # IMPORTANT: Use Snowpark session ONLY for Cortex Search
+    from snowflake.snowpark.context import get_active_session
+    session_sp = get_active_session()
 
-    # Input box for user prompt
     prompt = st.text_input(
-        "💬 Enter your query:",
+        "💬 Enter your query:", 
         value="Any goggles review?",
         placeholder="e.g., What do customers say about goggles?"
     )
@@ -270,28 +273,25 @@ with tab3:
             with st.spinner("🔍 Searching..."):
 
                 try:
-                    # Escape single quotes for SQL safety
-                    safe_prompt = prompt.replace("'", "''")
+                    # Use Snowpark Root() to access Cortex Search Service
+                    root = Root(session_sp)
 
-                    # Correct SQL for Cortex Search Service
-                    search_sql = f"""
-                        SELECT 
-                            CHUNK,
-                            FILE_NAME,
-                            METADATA:SENTIMENT_SCORE::FLOAT AS SENTIMENT_SCORE
-                        FROM TABLE(
-                            SNOWFLAKE.CORTEX.SEARCH_SERVICE_QUERY(
-                                'AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE',
-                                '{safe_prompt}',
-                                5
-                            )
-                        );
-                    """
+                    svc = (
+                        root
+                        .databases["AITECHSKILL_DB"]
+                        .schemas["AITECHSKILL_SCHEMA"]
+                        .cortex_search_services["AITECHSKILL_SEARCH_SERVICE"]
+                    )
 
-                    # Run the query
-                    search_df = session.sql(search_sql)
+                    resp = svc.search(
+                        query=prompt,
+                        columns=["CHUNK", "FILE_NAME", "SENTIMENT_SCORE"],
+                        limit=5
+                    ).to_json()
 
-                    # Display results
+                    json_conv = json.loads(resp)
+                    search_df = pd.json_normalize(json_conv["results"])
+
                     if len(search_df) > 0:
                         st.success(f"✅ Found {len(search_df)} relevant results")
 
@@ -304,19 +304,14 @@ with tab3:
                                 with col1:
                                     st.caption(f"📦 Product: {row['FILE_NAME']}")
                                 with col2:
-                                    if pd.notna(row["SENTIMENT_SCORE"]):
-                                        st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
-                                    else:
-                                        st.caption("😊 Sentiment: N/A")
+                                    st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
 
                                 st.markdown("---")
-
                     else:
                         st.warning("No results found. Try a different query.")
 
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
-
 
     # AI-Powered Q&A
     st.markdown("---")
