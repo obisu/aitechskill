@@ -4,7 +4,6 @@ import pandas as pd
 import re
 import altair as alt
 import json
-from snowflake.snowpark.context import get_active_session
 
 # Helper function to clean text
 def clean_text(text):
@@ -17,8 +16,29 @@ st.set_page_config(page_title="GenAI Reviews App", page_icon="🤖", layout="wid
 st.title("🤖 Hello, GenAI!")
 st.write("This is your GenAI-powered data processing app.")
 
-# Get Snowflake session
-session = get_active_session()
+# ============================================================================
+# GET SNOWFLAKE SESSION (Works for both Snowflake and Streamlit Cloud)
+# ============================================================================
+
+@st.cache_resource
+def get_session():
+    """Get Snowflake session - works in both environments"""
+    try:
+        # Try Streamlit's Snowflake connection first (for Streamlit Cloud)
+        return st.connection("snowflake").session()
+    except:
+        # Fallback to active session (for Snowflake Streamlit)
+        from snowflake.snowpark.context import get_active_session
+        return get_active_session()
+
+# Get session
+try:
+    session = get_session()
+    st.sidebar.success("✅ Connected to Snowflake")
+except Exception as e:
+    st.error(f"❌ Failed to connect to Snowflake: {str(e)}")
+    st.info("💡 Make sure to configure your Snowflake connection in Streamlit secrets")
+    st.stop()
 
 # Create tabs
 tab1, tab2, tab3 = st.tabs(["📤 Data Ingestion", "📊 Data & Plots", "🔍 RAG App"])
@@ -35,7 +55,7 @@ with tab1:
     with col1:
         if st.button("📥 Ingest Dataset"):
             try:
-                # Load from Snowflake stage instead of local file
+                # Load from Snowflake table
                 query = """
                 SELECT * FROM customer_reviews
                 LIMIT 1000
@@ -75,7 +95,7 @@ with tab1:
         
         st.dataframe(filtered_df, use_container_width=True, hide_index=True)
         
-        # Visualization using Altair (instead of matplotlib)
+        # Visualization using Altair
         if "SENTIMENT_SCORE" in st.session_state["df"].columns:
             st.subheader("📊 Average Sentiment Score by Product")
             
@@ -117,9 +137,7 @@ with tab2:
             st.error(f"❌ Error loading data: {str(e)}")
             st.stop()
 
-    # ========================================================================
     # Key Metrics
-    # ========================================================================
     st.subheader("📈 Key Metrics")
     
     col1, col2, col3, col4 = st.columns(4)
@@ -142,9 +160,7 @@ with tab2:
 
     st.markdown("---")
 
-    # ========================================================================
-    # Average sentiment by product (Using Altair)
-    # ========================================================================
+    # Average sentiment by product
     st.header("📊 Average Sentiment by Product")
     
     avg_sentiment_product = df.groupby("PRODUCT")["SENTIMENT_SCORE"].mean().reset_index()
@@ -161,9 +177,7 @@ with tab2:
 
     st.altair_chart(chart1, use_container_width=True)
 
-    # ========================================================================
     # Filter by product selection
-    # ========================================================================
     st.markdown("---")
     st.subheader("🔍 Filter by Product")
     
@@ -182,9 +196,7 @@ with tab2:
     st.subheader(f"📁 Reviews for {product}")
     st.dataframe(filtered_data, use_container_width=True, hide_index=True, height=400)
 
-    # ========================================================================
-    # Average sentiment by delivery status (Using Altair)
-    # ========================================================================
+    # Average sentiment by delivery status
     if "STATUS" in filtered_data.columns:
         st.header(f"📦 Average Sentiment by Delivery Status for {product}")
         
@@ -199,9 +211,7 @@ with tab2:
 
         st.altair_chart(chart2, use_container_width=True)
     
-    # ========================================================================
     # Sentiment Distribution
-    # ========================================================================
     st.header(f"📊 Sentiment Distribution for {product}")
     
     hist_chart = alt.Chart(filtered_data).mark_bar(color='coral').encode(
@@ -230,17 +240,15 @@ with tab3:
         if st.button("🔎 Run Query", type="primary"):
             with st.spinner("🔍 Searching..."):
                 try:
-                    # Use SQL to query Cortex Search Service
+                    # Simple text search in reviews
                     search_query = f"""
                     SELECT 
-                        value:CHUNK::string as chunk,
-                        value:file_name::string as file_name
-                    FROM TABLE(
-                        AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE(
-                            '{prompt.replace("'", "''")}'
-                        )
-                    )
-                    LIMIT 3
+                        REVIEW_TEXT as chunk,
+                        PRODUCT as file_name,
+                        SENTIMENT_SCORE
+                    FROM REVIEWS_WITH_SENTIMENT
+                    WHERE LOWER(REVIEW_TEXT) LIKE LOWER('%{prompt.replace("'", "''")}%')
+                    LIMIT 5
                     """
                     
                     search_df = session.sql(search_query).to_pandas()
@@ -252,48 +260,19 @@ with tab3:
                             with st.container():
                                 st.markdown(f"### Result {idx + 1}")
                                 st.info(row['CHUNK'])
-                                st.caption(f"📄 Source: {row['FILE_NAME']}")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
+                                with col2:
+                                    st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
                                 st.markdown("---")
                     else:
                         st.warning("No results found. Try a different query.")
                         
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
-                    
-                    # Fallback: Try alternative approach
-                    st.info("💡 Trying alternative search method...")
-                    
-                    try:
-                        # Alternative: Direct table query with text matching
-                        fallback_query = f"""
-                        SELECT 
-                            REVIEW_TEXT as chunk,
-                            PRODUCT as file_name
-                        FROM REVIEWS_WITH_SENTIMENT
-                        WHERE LOWER(REVIEW_TEXT) LIKE LOWER('%{prompt}%')
-                        LIMIT 3
-                        """
-                        
-                        fallback_df = session.sql(fallback_query).to_pandas()
-                        
-                        if len(fallback_df) > 0:
-                            st.success(f"✅ Found {len(fallback_df)} matching reviews")
-                            
-                            for idx, row in fallback_df.iterrows():
-                                with st.container():
-                                    st.markdown(f"### Result {idx + 1}")
-                                    st.info(row['CHUNK'])
-                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
-                                    st.markdown("---")
-                        else:
-                            st.warning("No matching reviews found.")
-                            
-                    except Exception as e2:
-                        st.error(f"❌ Fallback search also failed: {str(e2)}")
 
-    # ========================================================================
-    # Additional: AI-Powered Q&A
-    # ========================================================================
+    # AI-Powered Q&A
     st.markdown("---")
     st.subheader("💬 AI-Powered Q&A")
     st.markdown("Ask questions and get AI-generated insights from your reviews")
@@ -351,8 +330,6 @@ Provide a clear, insightful answer based on the data.'
             except Exception as e:
                 st.error(f"❌ Error generating AI response: {str(e)}")
 
-# ============================================================================
-# FOOTER
-# ============================================================================
+# Footer
 st.markdown("---")
 st.caption("🚀 Powered by Snowflake Cortex AI | Built with Streamlit")
