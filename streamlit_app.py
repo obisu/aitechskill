@@ -255,7 +255,6 @@ with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
 
-    # Use your custom Snowflake session
     session = get_snowflake_session()
 
     prompt = st.text_input(
@@ -269,17 +268,17 @@ with tab3:
             with st.spinner("🔍 Searching..."):
 
                 try:
-                    # Build Cortex Search SQL
+                    # Cortex Search SQL
                     search_sql = f"""
                         SELECT 
                             CHUNK,
                             FILE_NAME,
                             METADATA:SENTIMENT_SCORE::FLOAT AS SENTIMENT_SCORE
                         FROM TABLE(
-                            SNOWFLAKE.CORTEX.SEARCH(
-                                INDEX => 'AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE',
-                                QUERY => '{prompt.replace("'", "''")}',
-                                LIMIT => 5
+                            CORTEX_SEARCH(
+                                'AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE',
+                                '{prompt.replace("'", "''")}',
+                                5
                             )
                         );
                     """
@@ -310,6 +309,7 @@ with tab3:
 
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
+
 
     # AI-Powered Q&A
     st.markdown("---")
