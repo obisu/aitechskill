@@ -6,4 +6,4 @@ dependencies:
   - streamlit
   - snowflake-snowpark-python
   - pandas
-  - matplotlib
+  - altair
