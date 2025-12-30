@@ -251,23 +251,29 @@ with tab2:
 # ============================================================================
 # TAB 3: RAG App
 # ============================================================================
-with tab2:
-    st.title("RAG App")
+with tab3:
+    st.title("🔍 RAG App - Search Reviews")
+    st.markdown("Ask questions about your product reviews")
 
     # Use your custom Snowflake session
     session = get_snowflake_session()
 
     # Input box for user prompt
-    prompt = st.text_input("Enter your query:", value="Any goggles review?")
+    prompt = st.text_input(
+        "💬 Enter your query:",
+        value="Any goggles review?",
+        placeholder="e.g., What do customers say about goggles?"
+    )
 
     if prompt:
-        if st.button("Run Query"):
-            with st.spinner("Searching..."):
+        if st.button("🔎 Run Query", type="primary"):
+            with st.spinner("🔍 Searching..."):
 
                 try:
+                    # Escape single quotes for SQL safety
                     safe_prompt = prompt.replace("'", "''")
 
-                    # Query your Cortex Search Service
+                    # Correct SQL for Cortex Search Service
                     search_sql = f"""
                         SELECT 
                             CHUNK,
@@ -277,25 +283,40 @@ with tab2:
                             SNOWFLAKE.CORTEX.SEARCH_SERVICE_QUERY(
                                 'AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE',
                                 '{safe_prompt}',
-                                3
+                                5
                             )
                         );
                     """
 
+                    # Run the query
                     search_df = session.sql(search_sql)
 
-                    if len(search_df) == 0:
-                        st.warning("No results found.")
+                    # Display results
+                    if len(search_df) > 0:
+                        st.success(f"✅ Found {len(search_df)} relevant results")
+
+                        for idx, row in search_df.iterrows():
+                            with st.container():
+                                st.markdown(f"### Result {idx + 1}")
+                                st.info(row["CHUNK"])
+
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
+                                with col2:
+                                    if pd.notna(row["SENTIMENT_SCORE"]):
+                                        st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
+                                    else:
+                                        st.caption("😊 Sentiment: N/A")
+
+                                st.markdown("---")
+
                     else:
-                        for _, row in search_df.iterrows():
-                            st.write(f"**{row['CHUNK']}**")
-                            st.caption(f"📦 {row['FILE_NAME']}")
-                            if "SENTIMENT_SCORE" in row and row["SENTIMENT_SCORE"] is not None:
-                                st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
-                            st.write("---")
+                        st.warning("No results found. Try a different query.")
 
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
+
 
     # AI-Powered Q&A
     st.markdown("---")
