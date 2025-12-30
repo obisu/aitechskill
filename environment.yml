@@ -2,8 +2,8 @@ name: app_environment
 channels:
   - snowflake
 dependencies:
-  - matplotlib=*
-  - plotly=*
-  - seaborn=*
-  - snowflake=*
-  - snowflake-ml-python=*
+  - python=3.10
+  - streamlit
+  - snowflake-snowpark-python
+  - pandas
+  - matplotlib
