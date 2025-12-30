@@ -4,6 +4,8 @@ import pandas as pd
 import re
 import altair as alt
 import json
+import os
+import snowflake.connector
 
 # Helper function to clean text
 def clean_text(text):
@@ -13,32 +15,61 @@ def clean_text(text):
 
 st.set_page_config(page_title="GenAI Reviews App", page_icon="🤖", layout="wide")
 
-st.title("🤖 Hello, GenAI!")
+st.title("🤖 Avalanche Streamlit App")
 st.write("This is your GenAI-powered data processing app.")
 
 # ============================================================================
-# GET SNOWFLAKE SESSION (Works for both Snowflake and Streamlit Cloud)
+# SNOWFLAKE CONNECTION USING ENVIRONMENT VARIABLES
 # ============================================================================
 
 @st.cache_resource
-def get_session():
-    """Get Snowflake session - works in both environments"""
+def get_snowflake_session():
+    """Create Snowflake connection from environment variables"""
     try:
-        # Try Streamlit's Snowflake connection first (for Streamlit Cloud)
-        return st.connection("snowflake").session()
-    except:
-        # Fallback to active session (for Snowflake Streamlit)
-        from snowflake.snowpark.context import get_active_session
-        return get_active_session()
+        conn = snowflake.connector.connect(
+            user=os.getenv("SNOWFLAKE_USER"),
+            password=os.getenv("SNOWFLAKE_PASSWORD"),
+            account=os.getenv("SNOWFLAKE_ACCOUNT"),
+            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+            database=os.getenv("SNOWFLAKE_DATABASE"),
+            schema=os.getenv("SNOWFLAKE_SCHEMA"),
+        )
+        
+        # Session wrapper to mimic Snowpark-style .sql().to_pandas()
+        class SessionWrapper:
+            def __init__(self, conn):
+                self.conn = conn
+            
+            def sql(self, query):
+                """Execute SQL and return as pandas DataFrame"""
+                cur = self.conn.cursor()
+                try:
+                    cur.execute(query)
+                    rows = cur.fetchall()
+                    cols = [c[0] for c in cur.description]
+                    df = pd.DataFrame(rows, columns=cols)
+                    return df
+                finally:
+                    cur.close()
+            
+            def close(self):
+                """Close the connection"""
+                self.conn.close()
+        
+        return SessionWrapper(conn)
+    
+    except Exception as e:
+        st.error(f"❌ Failed to connect to Snowflake: {str(e)}")
+        st.info("💡 Please check your environment variables")
+        return None
 
 # Get session
-try:
-    session = get_session()
-    st.sidebar.success("✅ Connected to Snowflake")
-except Exception as e:
-    st.error(f"❌ Failed to connect to Snowflake: {str(e)}")
-    st.info("💡 Make sure to configure your Snowflake connection in Streamlit secrets")
+session = get_snowflake_session()
+
+if session is None:
     st.stop()
+else:
+    st.sidebar.success("✅ Connected to Snowflake")
 
 # Create tabs
 tab1, tab2, tab3 = st.tabs(["📤 Data Ingestion", "📊 Data & Plots", "🔍 RAG App"])
@@ -55,12 +86,11 @@ with tab1:
     with col1:
         if st.button("📥 Ingest Dataset"):
             try:
-                # Load from Snowflake table
                 query = """
                 SELECT * FROM customer_reviews
                 LIMIT 1000
                 """
-                st.session_state["df"] = session.sql(query).to_pandas()
+                st.session_state["df"] = session.sql(query)
                 st.success(f"✅ Dataset loaded successfully! ({len(st.session_state['df']):,} rows)")
             except Exception as e:
                 st.error(f"❌ Error loading dataset: {str(e)}")
@@ -78,7 +108,6 @@ with tab1:
 
     # Display the dataset if it exists
     if "df" in st.session_state:
-        # Product filter dropdown
         st.subheader("🔍 Filter by Product")
         product = st.selectbox(
             "Choose a product", 
@@ -95,7 +124,6 @@ with tab1:
         
         st.dataframe(filtered_df, use_container_width=True, hide_index=True)
         
-        # Visualization using Altair
         if "SENTIMENT_SCORE" in st.session_state["df"].columns:
             st.subheader("📊 Average Sentiment Score by Product")
             
@@ -119,14 +147,13 @@ with tab1:
 with tab2:
     st.title("📊 Customer Sentiment and Delivery Analysis")
 
-    # Data loading functions
     @st.cache_data
     def load_data():
         query_reviews = """
         SELECT *
         FROM REVIEWS_WITH_SENTIMENT
         """
-        return session.sql(query_reviews).to_pandas()
+        return session.sql(query_reviews)
 
     # Load data
     with st.spinner("📥 Loading data..."):
@@ -177,7 +204,7 @@ with tab2:
 
     st.altair_chart(chart1, use_container_width=True)
 
-    # Filter by product selection
+    # Filter by product
     st.markdown("---")
     st.subheader("🔍 Filter by Product")
     
@@ -192,7 +219,6 @@ with tab2:
     else:
         filtered_data = df
 
-    # Display filtered dataset
     st.subheader(f"📁 Reviews for {product}")
     st.dataframe(filtered_data, use_container_width=True, hide_index=True, height=400)
 
@@ -226,10 +252,9 @@ with tab2:
 # TAB 3: RAG App
 # ============================================================================
 with tab3:
-    st.title("🔍 RAG App - Cortex Search")
-    st.markdown("Ask questions about your product reviews using AI-powered search")
+    st.title("🔍 RAG App - Search Reviews")
+    st.markdown("Ask questions about your product reviews")
 
-    # Input box for user prompt
     prompt = st.text_input(
         "💬 Enter your query:", 
         value="Any goggles review?",
@@ -240,7 +265,6 @@ with tab3:
         if st.button("🔎 Run Query", type="primary"):
             with st.spinner("🔍 Searching..."):
                 try:
-                    # Simple text search in reviews
                     search_query = f"""
                     SELECT 
                         REVIEW_TEXT as chunk,
@@ -251,7 +275,7 @@ with tab3:
                     LIMIT 5
                     """
                     
-                    search_df = session.sql(search_query).to_pandas()
+                    search_df = session.sql(search_query)
                     
                     if len(search_df) > 0:
                         st.success(f"✅ Found {len(search_df)} relevant results")
@@ -275,7 +299,6 @@ with tab3:
     # AI-Powered Q&A
     st.markdown("---")
     st.subheader("💬 AI-Powered Q&A")
-    st.markdown("Ask questions and get AI-generated insights from your reviews")
     
     qa_question = st.text_area(
         "Ask a question about your reviews:",
@@ -285,7 +308,6 @@ with tab3:
     if qa_question and st.button("🤖 Get AI Answer", type="secondary"):
         with st.spinner("🤔 Generating answer..."):
             try:
-                # Get sample reviews for context
                 context_query = """
                 SELECT 
                     PRODUCT,
@@ -294,19 +316,16 @@ with tab3:
                 FROM REVIEWS_WITH_SENTIMENT
                 LIMIT 20
                 """
-                context_df = session.sql(context_query).to_pandas()
+                context_df = session.sql(context_query)
                 
-                # Build context
                 context_text = "\n".join([
                     f"Product: {row['PRODUCT']}, Review: {row['REVIEW_TEXT'][:150]}, Sentiment: {row['SENTIMENT_SCORE']:.2f}"
                     for _, row in context_df.iterrows()
                 ])
                 
-                # Escape quotes
                 context_text = context_text.replace("'", "''")
                 qa_question_escaped = qa_question.replace("'", "''")
                 
-                # Call Cortex Complete
                 ai_query = f"""
                 SELECT SNOWFLAKE.CORTEX.COMPLETE(
                     'claude-3-5-sonnet',
@@ -321,7 +340,7 @@ Provide a clear, insightful answer based on the data.'
                 ) AS response
                 """
                 
-                response_df = session.sql(ai_query).to_pandas()
+                response_df = session.sql(ai_query)
                 response = response_df['RESPONSE'].iloc[0]
                 
                 st.markdown("### 🤖 AI Response:")
@@ -330,6 +349,5 @@ Provide a clear, insightful answer based on the data.'
             except Exception as e:
                 st.error(f"❌ Error generating AI response: {str(e)}")
 
-# Footer
 st.markdown("---")
 st.caption("🚀 Powered by Snowflake Cortex AI | Built with Streamlit")
