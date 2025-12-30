@@ -254,9 +254,7 @@ with tab2:
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
-
-    session = get_active_session()
-
+    session = get_snowflake_session()
     # User query input
     prompt = st.text_input(
         "💬 Enter your query:",
