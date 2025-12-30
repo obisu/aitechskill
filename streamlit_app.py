@@ -253,15 +253,8 @@ with tab2:
 # ============================================================================
 
 with tab3:
-    st.title("🔍 RAG App - Search Reviews")
+    st.title("🔍 RAG App - Smart Review Search (Avalanche Style)")
     st.markdown("Ask questions about your product reviews")
-
-    # IMPORTANT: Use Snowpark session inside Snowflake Native Streamlit
-    from snowflake.snowpark.context import get_active_session
-    from snowflake.cortex import Root
-
-    session_sp = get_active_session()
-    root = Root(session_sp)
 
     prompt = st.text_input(
         "💬 Enter your query:",
@@ -271,49 +264,72 @@ with tab3:
 
     if prompt:
         if st.button("🔎 Run Query", type="primary"):
-            with st.spinner("🔍 Searching..."):
+            with st.spinner("Searching reviews..."):
 
                 try:
-                    # Connect to your Cortex Search Service
-                    svc = (
-                        root
-                        .databases["AITECHSKILL_DB"]
-                        .schemas["AITECHSKILL_SCHEMA"]
-                        .cortex_search_services["AITECHSKILL_SEARCH_SERVICE"]
-                    )
+                    safe_prompt = prompt.replace("'", "''")
 
-                    # Run semantic search
-                    resp = svc.search(
-                        query=prompt,
-                        columns=["CHUNK", "FILE_NAME", "SENTIMENT_SCORE"],
-                        limit=5
-                    ).to_json()
+                    # Simple keyword search (Avalanche style)
+                    search_sql = f"""
+                        SELECT 
+                            REVIEW_TEXT,
+                            PRODUCT,
+                            SENTIMENT_SCORE
+                        FROM REVIEWS_WITH_SENTIMENT
+                        WHERE LOWER(REVIEW_TEXT) LIKE LOWER('%{safe_prompt}%')
+                        LIMIT 10;
+                    """
 
-                    # Convert JSON to DataFrame
-                    json_conv = json.loads(resp)
-                    search_df = pd.json_normalize(json_conv["results"])
+                    search_df = session.sql(search_sql)
 
-                    if len(search_df) > 0:
-                        st.success(f"✅ Found {len(search_df)} relevant results")
-
-                        for idx, row in search_df.iterrows():
-                            with st.container():
-                                st.markdown(f"### Result {idx + 1}")
-                                st.info(row["CHUNK"])
-
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
-                                with col2:
-                                    st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
-
-                                st.markdown("---")
-
+                    if len(search_df) == 0:
+                        st.warning("No matching reviews found.")
                     else:
-                        st.warning("No results found. Try a different query.")
+                        st.success(f"Found {len(search_df)} matching reviews")
+
+                        # Show the raw results
+                        for idx, row in search_df.iterrows():
+                            st.markdown(f"### Result {idx + 1}")
+                            st.info(row["REVIEW_TEXT"])
+                            st.caption(f"📦 Product: {row['PRODUCT']}")
+                            st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
+                            st.write("---")
+
+                        # Build context for LLM
+                        context = "\n".join(
+                            f"- {r['REVIEW_TEXT']}" for _, r in search_df.iterrows()
+                        ).replace("'", "''")
+
+                        # Construct the prompt (Avalanche style)
+                        full_prompt = f"""
+You are a helpful AI assistant. Use the customer review context below to answer the question.
+
+<context>
+{context}
+</context>
+
+<question>
+{safe_prompt}
+</question>
+
+Provide a clear, concise answer.
+"""
+
+                        # Call Cortex COMPLETE
+                        qa_sql = f"""
+                            SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                                'claude-3-5-sonnet',
+                                $$ {full_prompt} $$
+                            ) AS ANSWER;
+                        """
+
+                        answer_df = session.sql(qa_sql)
+                        st.subheader("🤖 AI Summary")
+                        st.success(answer_df["ANSWER"].iloc[0])
 
                 except Exception as e:
-                    st.error(f"❌ Error during search: {str(e)}")
+                    st.error(f"❌ Error: {str(e)}")
+
 
 
     # AI-Powered Q&A
