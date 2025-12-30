@@ -256,6 +256,9 @@ with tab3:
     st.title("🔍 RAG App - Smart Review Search (Avalanche Style)")
     st.markdown("Ask questions about your product reviews")
 
+    # IMPORTANT: Use the same connector session as Avalanche
+    session = SessionWrapper(conn)
+
     prompt = st.text_input(
         "💬 Enter your query:",
         value="Any goggles review?",
@@ -268,16 +271,17 @@ with tab3:
 
                 try:
                     safe_prompt = prompt.replace("'", "''")
+                    keywords = safe_prompt.lower().split()
+                    conditions = " OR ".join([f"LOWER(REVIEW_TEXT) LIKE '%{k}%'" for k in keywords])
 
-                    # Simple keyword search (Avalanche style)
                     search_sql = f"""
                         SELECT 
                             REVIEW_TEXT,
                             PRODUCT,
                             SENTIMENT_SCORE
                         FROM REVIEWS_WITH_SENTIMENT
-                        WHERE LOWER(REVIEW_TEXT) LIKE LOWER('%{safe_prompt}%')
-                        LIMIT 10;
+                        WHERE {conditions}
+                        LIMIT 20;
                     """
 
                     search_df = session.sql(search_sql)
@@ -287,7 +291,6 @@ with tab3:
                     else:
                         st.success(f"Found {len(search_df)} matching reviews")
 
-                        # Show the raw results
                         for idx, row in search_df.iterrows():
                             st.markdown(f"### Result {idx + 1}")
                             st.info(row["REVIEW_TEXT"])
@@ -295,12 +298,10 @@ with tab3:
                             st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
                             st.write("---")
 
-                        # Build context for LLM
                         context = "\n".join(
                             f"- {r['REVIEW_TEXT']}" for _, r in search_df.iterrows()
                         ).replace("'", "''")
 
-                        # Construct the prompt (Avalanche style)
                         full_prompt = f"""
 You are a helpful AI assistant. Use the customer review context below to answer the question.
 
@@ -315,7 +316,6 @@ You are a helpful AI assistant. Use the customer review context below to answer 
 Provide a clear, concise answer.
 """
 
-                        # Call Cortex COMPLETE
                         qa_sql = f"""
                             SELECT SNOWFLAKE.CORTEX.COMPLETE(
                                 'claude-3-5-sonnet',
@@ -329,7 +329,6 @@ Provide a clear, concise answer.
 
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
-
 
 
     # AI-Powered Q&A
