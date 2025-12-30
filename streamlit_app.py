@@ -254,8 +254,10 @@ with tab2:
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
+
+    # Use your custom Snowflake session
     session = get_snowflake_session()
-    # User query input
+
     prompt = st.text_input(
         "💬 Enter your query:",
         value="Any goggles review?",
@@ -267,27 +269,22 @@ with tab3:
             with st.spinner("🔍 Searching..."):
 
                 try:
-                    # Initialize Root object
-                    root = Root(session)
+                    # Build Cortex Search SQL
+                    search_sql = f"""
+                        SELECT 
+                            CHUNK,
+                            FILE_NAME,
+                            METADATA:SENTIMENT_SCORE::FLOAT AS SENTIMENT_SCORE
+                        FROM TABLE(
+                            SNOWFLAKE.CORTEX.SEARCH(
+                                INDEX => 'AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE',
+                                QUERY => '{prompt.replace("'", "''")}',
+                                LIMIT => 5
+                            )
+                        );
+                    """
 
-                    # Connect to Cortex Search service
-                    svc = (
-                        root
-                        .databases["AITECHSKILL_DB"]
-                        .schemas["AITECHSKILL_SCHEMA"]
-                        .cortex_search_services["AITECHSKILL_SEARCH_SERVICE"]
-                    )
-
-                    # Run semantic search
-                    resp = svc.search(
-                        query=prompt,
-                        columns=["CHUNK", "file_name", "SENTIMENT_SCORE"],
-                        limit=5
-                    ).to_json()
-
-                    # Convert JSON to DataFrame
-                    json_conv = json.loads(resp) if isinstance(resp, str) else resp
-                    search_df = pd.json_normalize(json_conv["results"])
+                    search_df = session.sql(search_sql)
 
                     if len(search_df) > 0:
                         st.success(f"✅ Found {len(search_df)} relevant results")
@@ -299,9 +296,9 @@ with tab3:
 
                                 col1, col2 = st.columns(2)
                                 with col1:
-                                    st.caption(f"📦 Product: {row['file_name']}")
+                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
                                 with col2:
-                                    if "SENTIMENT_SCORE" in row:
+                                    if pd.notna(row["SENTIMENT_SCORE"]):
                                         st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
                                     else:
                                         st.caption("😊 Sentiment: N/A")
@@ -313,7 +310,6 @@ with tab3:
 
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
-
 
     # AI-Powered Q&A
     st.markdown("---")
