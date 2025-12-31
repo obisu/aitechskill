@@ -282,12 +282,22 @@ with tab3:
                     # Escape prompt for SQL
                     safe_prompt = prompt.replace("'", "''")
                     
-                    # Try the simpler syntax without TABLE()
+                    # Correct Cortex Search Service syntax - using SNOWFLAKE.CORTEX.SEARCH
                     search_sql = f"""
-                        SELECT * FROM AITECHSKILL_SEARCH_SERVICE(
-                            QUERY => '{safe_prompt}',
-                            COLUMNS => ARRAY_CONSTRUCT('FILE_NAME', 'CHUNK'),
-                            MAX_RESULTS => 5
+                        SELECT 
+                            PARSE_JSON(value):file_name::STRING AS FILE_NAME,
+                            PARSE_JSON(value):chunk::STRING AS CHUNK,
+                            PARSE_JSON(value):distance::FLOAT AS DISTANCE
+                        FROM TABLE(
+                            FLATTEN(
+                                input => PARSE_JSON(
+                                    SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
+                                        'AITECHSKILL_SEARCH_SERVICE',
+                                        '{safe_prompt}',
+                                        5
+                                    )
+                                ):results
+                            )
                         )
                     """
                     
@@ -295,48 +305,31 @@ with tab3:
 
                     if search_df is not None and len(search_df) > 0:
                         st.success(f"✅ Found {len(search_df)} relevant results")
-                        
-                        # Display the raw results first to see the structure
-                        with st.expander("🔍 View raw search results"):
-                            st.dataframe(search_df, use_container_width=True)
 
-                        # Try to display formatted results
                         for idx, row in search_df.iterrows():
                             with st.container():
                                 st.markdown(f"### Result {idx + 1}")
-                                
-                                # Handle different possible column names
-                                chunk = row.get('CHUNK') or row.get('chunk') or str(row)
-                                st.info(chunk)
+                                st.info(row["CHUNK"])
 
                                 col1, col2 = st.columns(2)
                                 with col1:
-                                    file_name = row.get('FILE_NAME') or row.get('file_name') or 'N/A'
-                                    st.caption(f"📦 File: {file_name}")
+                                    st.caption(f"📦 File: {row['FILE_NAME']}")
                                 with col2:
-                                    distance = row.get('DISTANCE') or row.get('distance') or row.get('SCORE') or 'N/A'
-                                    if distance != 'N/A':
-                                        st.caption(f"🎯 Relevance: {distance:.4f}")
+                                    if pd.notna(row['DISTANCE']):
+                                        st.caption(f"🎯 Relevance: {row['DISTANCE']:.4f}")
 
                                 st.markdown("---")
                         
-                        # Get AI summary if we have chunk data
+                        # Get AI summary
                         st.markdown("---")
                         st.subheader("🤖 AI Summary of Results")
                         
-                        try:
-                            # Try to extract chunk text
-                            chunks = []
-                            for _, row in search_df.iterrows():
-                                chunk = row.get('CHUNK') or row.get('chunk')
-                                file = row.get('FILE_NAME') or row.get('file_name') or 'Unknown'
-                                if chunk:
-                                    chunks.append(f"From {file}:\n{chunk}")
-                            
-                            if chunks:
-                                context = "\n\n".join(chunks).replace("'", "''")
-                                
-                                summary_prompt = f"""
+                        context = "\n\n".join([
+                            f"From {row['FILE_NAME']}:\n{row['CHUNK']}" 
+                            for _, row in search_df.iterrows()
+                        ]).replace("'", "''")
+                        
+                        summary_prompt = f"""
 Based on the following search results, provide a concise summary answering the user's question: "{safe_prompt}"
 
 Search Results:
@@ -344,21 +337,17 @@ Search Results:
 
 Provide a clear, helpful answer based on the information found.
 """
-                                
-                                ai_query = f"""
-                                    SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                                        'claude-3-5-sonnet',
-                                        $${summary_prompt}$$
-                                    ) AS response
-                                """
-                                
-                                response_df = session.sql(ai_query)
-                                if response_df is not None and len(response_df) > 0:
-                                    st.success(response_df['RESPONSE'].iloc[0])
-                            else:
-                                st.info("Unable to generate summary - chunk data not found")
-                        except Exception as summary_error:
-                            st.warning(f"Could not generate AI summary: {str(summary_error)}")
+                        
+                        ai_query = f"""
+                            SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                                'claude-3-5-sonnet',
+                                $${summary_prompt}$$
+                            ) AS response
+                        """
+                        
+                        response_df = session.sql(ai_query)
+                        if response_df is not None and len(response_df) > 0:
+                            st.success(response_df['RESPONSE'].iloc[0])
                         
                     else:
                         st.warning("No results found. Try a different query.")
@@ -368,17 +357,25 @@ Provide a clear, helpful answer based on the information found.
                     import traceback
                     st.code(traceback.format_exc())
                     
-                    st.info("💡 Let's try querying the source table directly instead...")
+                    st.info("💡 Trying direct table query as fallback...")
                     
                     # Fallback: Query the source table directly
                     try:
+                        safe_prompt = prompt.replace("'", "''")
+                        keywords = safe_prompt.lower().split()
+                        
+                        # Build LIKE conditions for each keyword
+                        like_conditions = " OR ".join([
+                            f"LOWER(CHUNK) LIKE '%{kw}%'" for kw in keywords[:3]  # Use first 3 keywords
+                        ])
+                        
                         fallback_sql = f"""
                             SELECT 
                                 FILE_NAME,
                                 CHUNK
                             FROM AITECHSKILL_DB.AITECHSKILL_SCHEMA.CHUNKED_CONTENT
-                            WHERE LOWER(CHUNK) LIKE LOWER('%{safe_prompt}%')
-                            LIMIT 5
+                            WHERE {like_conditions}
+                            LIMIT 10
                         """
                         
                         fallback_df = session.sql(fallback_sql)
@@ -391,6 +388,31 @@ Provide a clear, helpful answer based on the information found.
                                 st.info(row["CHUNK"])
                                 st.caption(f"📦 File: {row['FILE_NAME']}")
                                 st.markdown("---")
+                            
+                            # AI summary for fallback results
+                            context = "\n\n".join([
+                                f"From {row['FILE_NAME']}:\n{row['CHUNK']}" 
+                                for _, row in fallback_df.iterrows()
+                            ]).replace("'", "''")
+                            
+                            summary_prompt = f"""
+Based on the following search results, answer: "{prompt}"
+
+Results:
+{context}
+"""
+                            
+                            ai_query = f"""
+                                SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                                    'claude-3-5-sonnet',
+                                    $${summary_prompt}$$
+                                ) AS response
+                            """
+                            
+                            response_df = session.sql(ai_query)
+                            if response_df is not None:
+                                st.subheader("🤖 AI Summary")
+                                st.success(response_df['RESPONSE'].iloc[0])
                         else:
                             st.warning("No results found in direct query either.")
                             
@@ -399,7 +421,7 @@ Provide a clear, helpful answer based on the information found.
 
     # Additional AI-Powered Q&A Section
     st.markdown("---")
-    st.subheader("💬 AI-Powered Q&A (Direct Table Query)")
+    st.subheader("💬 AI-Powered Q&A")
     
     qa_question = st.text_area(
         "Ask a question about your reviews:",
@@ -410,15 +432,19 @@ Provide a clear, helpful answer based on the information found.
     if qa_question and st.button("🤖 Get AI Answer", type="secondary", key="tab3_qa_button"):
         with st.spinner("🤔 Generating answer..."):
             try:
-                # Query the source table directly
                 safe_qa = qa_question.replace("'", "''")
+                keywords = safe_qa.lower().split()[:3]
+                
+                like_conditions = " OR ".join([
+                    f"LOWER(CHUNK) LIKE '%{kw}%'" for kw in keywords
+                ])
                 
                 context_query = f"""
                     SELECT 
                         FILE_NAME,
                         CHUNK
                     FROM AITECHSKILL_DB.AITECHSKILL_SCHEMA.CHUNKED_CONTENT
-                    WHERE LOWER(CHUNK) LIKE LOWER('%{safe_qa.split()[0]}%')
+                    WHERE {like_conditions}
                     LIMIT 20
                 """
                 
