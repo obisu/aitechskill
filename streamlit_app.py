@@ -292,9 +292,7 @@ with tab3:
                         FROM TABLE(
                             FLATTEN(
                                 input => PARSE_JSON(
-                                    SYSTEM$CORTEX_SEARCH_QUERY(
-                                        'AITECHSKILL_SEARCH_SERVICE',
-                                        '{safe_prompt}'
+                                    SYSTEM$CORTEX_SEARCH_QUERY('{safe_prompt}')
                                     )
                                 ):results
                             )
