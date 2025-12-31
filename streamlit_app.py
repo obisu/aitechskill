@@ -283,6 +283,7 @@ with tab3:
                     safe_prompt = prompt.replace("'", "''")
                     
                     # Correct Cortex Search Service syntax - using SNOWFLAKE.CORTEX.SEARCH
+                   
                     search_sql = f"""
                         SELECT 
                             PARSE_JSON(value):file_name::STRING AS FILE_NAME,
@@ -291,7 +292,7 @@ with tab3:
                         FROM TABLE(
                             FLATTEN(
                                 input => PARSE_JSON(
-                                    SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
+                                    SNOWFLAKE.CORTEX.SEARCH(
                                         'AITECHSKILL_SEARCH_SERVICE',
                                         '{safe_prompt}'
                                     )
