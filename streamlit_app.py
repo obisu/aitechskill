@@ -253,6 +253,10 @@ with tab2:
 # TAB 3: RAG App with SQL-based Search
 # ============================================================================
 
+# ============================================================================
+# TAB 3: RAG App with SQL-based Search
+# ============================================================================
+
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
@@ -260,11 +264,12 @@ with tab3:
     prompt = st.text_input(
         "💬 Enter your query:", 
         value="Any goggles review?",
-        placeholder="e.g., What do customers say about goggles?"
+        placeholder="e.g., What do customers say about goggles?",
+        key="search_prompt"  # ✅ Added unique key
     )
 
     if prompt:
-        if st.button("🔎 Run Query", type="primary"):
+        if st.button("🔎 Run Query", type="primary", key="search_button"):  # ✅ Added unique key
             with st.spinner("🔍 Searching..."):
 
                 try:
@@ -309,6 +314,60 @@ with tab3:
                     st.error(f"❌ Error during search: {str(e)}")
                     st.info("💡 Make sure the Cortex Search Service 'AITECHSKILL_SEARCH_SERVICE' exists")
 
+    # AI-Powered Q&A Section
+    st.markdown("---")
+    st.subheader("💬 AI-Powered Q&A")
+    
+    qa_question = st.text_area(
+        "Ask a question about your reviews:",
+        placeholder="e.g., What are the main complaints about delivery times?",
+        key="qa_question"  # ✅ Added unique key
+    )
+    
+    if qa_question and st.button("🤖 Get AI Answer", type="secondary", key="qa_button"):  # ✅ Added unique key
+        with st.spinner("🤔 Generating answer..."):
+            try:
+                context_query = """
+                SELECT 
+                    PRODUCT,
+                    REVIEW_TEXT,
+                    SENTIMENT_SCORE
+                FROM REVIEWS_WITH_SENTIMENT
+                LIMIT 20
+                """
+                context_df = session.sql(context_query)
+                
+                context_text = "\n".join([
+                    f"Product: {row['PRODUCT']}, Review: {row['REVIEW_TEXT'][:150]}, Sentiment: {row['SENTIMENT_SCORE']:.2f}"
+                    for _, row in context_df.iterrows()
+                ])
+                
+                context_text = context_text.replace("'", "''")
+                qa_question_escaped = qa_question.replace("'", "''")
+                
+                ai_query = f"""
+                SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                    'claude-3-5-sonnet',
+                    'You are a helpful data analyst. Answer this question about customer reviews:
+                    
+Question: {qa_question_escaped}
+
+Sample Reviews:
+{context_text}
+
+Provide a clear, insightful answer based on the data.'
+                ) AS response
+                """
+                
+                response_df = session.sql(ai_query)
+                response = response_df['RESPONSE'].iloc[0]
+                
+                st.markdown("### 🤖 AI Response:")
+                st.success(response)
+                
+            except Exception as e:
+                st.error(f"❌ Error generating AI response: {str(e)}")
+    
     # AI-Powered Q&A Section
     st.markdown("---")
     st.subheader("💬 AI-Powered Q&A")
