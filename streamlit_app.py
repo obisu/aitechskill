@@ -84,12 +84,18 @@ tab1, tab2, tab3 = st.tabs(["📤 Data Ingestion", "📊 Data & Plots", "🔍 RA
 # ============================================================================
 # TAB 1: Data Ingestion
 # ============================================================================
+# ============================================================================
+# TAB 1: Data Ingestion
+# ============================================================================
 with tab1:
     st.header("📥 Data Ingestion & Processing")
-    
+
     # Layout two buttons side by side
     col1, col2 = st.columns(2)
 
+    # -----------------------------
+    # 1️⃣ INGEST DATASET
+    # -----------------------------
     with col1:
         if st.button("📥 Ingest Dataset", key="ingest_button"):
             try:
@@ -97,21 +103,48 @@ with tab1:
                 SELECT * FROM customer_reviews
                 LIMIT 1000
                 """
-                st.session_state["df"] = session.sql(query)
-                st.success(f"✅ Dataset loaded successfully! ({len(st.session_state['df']):,} rows)")
+                df = session.sql(query)
+                st.session_state["df"] = df
+
+                st.success(f"✅ Dataset loaded successfully! ({len(df):,} rows)")
+                st.dataframe(df)
+
             except Exception as e:
                 st.error(f"❌ Error loading dataset: {str(e)}")
 
+    # -----------------------------
+    # 2️⃣ PARSE / CLEAN REVIEWS
+    # -----------------------------
     with col2:
         if st.button("🧹 Parse Reviews", key="parse_button"):
-            if "df" in st.session_state:
-                if "SUMMARY" in st.session_state["df"].columns:
-                    st.session_state["df"]["CLEANED_SUMMARY"] = st.session_state["df"]["SUMMARY"].apply(clean_text)
-                    st.success("✅ Reviews parsed and cleaned!")
-                else:
-                    st.warning("⚠️ No SUMMARY column found in dataset")
-            else:
+
+            # Ensure dataset is loaded
+            if "df" not in st.session_state:
                 st.warning("⚠️ Please ingest the dataset first.")
+            else:
+                df = st.session_state["df"]
+
+                # Automatically detect the review text column
+                possible_columns = ["SUMMARY", "REVIEW", "REVIEW_TEXT", "TEXT", "COMMENTS", "CONTENT", "BODY"]
+                detected_col = None
+
+                for col in possible_columns:
+                    if col in df.columns:
+                        detected_col = col
+                        break
+
+                if detected_col is None:
+                    st.warning("⚠️ No recognizable review text column found in dataset.")
+                else:
+                    # Clean the detected column
+                    cleaned_col_name = f"CLEANED_{detected_col}"
+                    df[cleaned_col_name] = df[detected_col].apply(clean_text)
+
+                    st.session_state["df"] = df  # Save back to session state
+
+                    st.success(f"✅ Reviews parsed and cleaned using column: {detected_col}")
+                    st.dataframe(df[[detected_col, cleaned_col_name]].head())
+
 
     # Display the dataset if it exists
     if "df" in st.session_state:
