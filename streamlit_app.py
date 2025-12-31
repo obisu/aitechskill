@@ -256,59 +256,22 @@ with tab2:
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
-
-    prompt = st.text_input(
-        "💬 Enter your query:", 
-        value="Any goggles review?",
-        placeholder="e.g., What do customers say about goggles?",
-        key="tab3_search_prompt"
-    )
-
-    if prompt:
-        if st.button("🔎 Run Query", type="primary", key="tab3_search_button"):
-            with st.spinner("🔍 Searching..."):
-
-                try:
-                    # Escape prompt for SQL
-                    safe_prompt = prompt.replace("'", "''")
-                    
-                    # Use Cortex Search via SQL
-                    search_sql = f"""
-                        SELECT 
-                            result:chunk::STRING AS CHUNK,
-                            result:file_name::STRING AS FILE_NAME,
-                            result:sentiment_score::FLOAT AS SENTIMENT_SCORE
-                        FROM TABLE(
-                            AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE!SEARCH(
-                                '{safe_prompt}',
-                                5
-                            )
-                        )
-                    """
-                    
-                    search_df = session.sql(search_sql)
-
-                    if len(search_df) > 0:
-                        st.success(f"✅ Found {len(search_df)} relevant results")
-
-                        for idx, row in search_df.iterrows():
-                            with st.container():
-                                st.markdown(f"### Result {idx + 1}")
-                                st.info(row["CHUNK"])
-
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
-                                with col2:
-                                    st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
-
-                                st.markdown("---")
-                    else:
-                        st.warning("No results found. Try a different query.")
-
-                except Exception as e:
-                    st.error(f"❌ Error during search: {str(e)}")
-                    st.info("💡 Make sure the Cortex Search Service 'AITECHSKILL_SEARCH_SERVICE' exists")
+    
+    # Diagnostic: Check if Cortex Search Service exists
+    with st.expander("🔧 Diagnostic: Check Search Service"):
+        if st.button("Check Search Service", key="check_service"):
+            try:
+                check_sql = """
+                SHOW CORTEX SEARCH SERVICES IN SCHEMA AITECHSKILL_DB.AITECHSKILL_SCHEMA
+                """
+                services_df = session.sql(check_sql)
+                if len(services_df) > 0:
+                    st.success(f"✅ Found {len(services_df)} Cortex Search Service(s)")
+                    st.dataframe(services_df, use_container_width=True)
+                else:
+                    st.warning("⚠️ No Cortex Search Services found in this schema")
+            except Exception as e:
+                st.error(f"❌ Error checking services: {str(e)}")
 
     # AI-Powered Q&A Section
     st.markdown("---")
