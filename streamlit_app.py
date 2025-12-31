@@ -292,7 +292,7 @@ with tab3:
                         FROM TABLE(
                             FLATTEN(
                                 input => PARSE_JSON(
-                                    SNOWFLAKE.CORTEX.SEARCH(
+                                    SYSTEM$CORTEX_SEARCH_QUERY(
                                         'AITECHSKILL_SEARCH_SERVICE',
                                         '{safe_prompt}'
                                     )
