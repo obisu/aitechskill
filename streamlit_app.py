@@ -252,87 +252,82 @@ with tab2:
 # ============================================================================
 # TAB 3: RAG App
 # ============================================================================
-
 with tab3:
-    st.title("🔍 RAG App - Smart Review Search (Avalanche Style)")
+    st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
 
-    # Use the session that was already created at the top of the file
-    # No need to recreate it here!
+    # Create Snowpark session from connection parameters
+    try:
+        from snowflake.snowpark import Session
+        
+        connection_parameters = {
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "database": os.getenv("SNOWFLAKE_DATABASE"),
+            "schema": os.getenv("SNOWFLAKE_SCHEMA"),
+        }
+        
+        session_sp = Session.builder.configs(connection_parameters).create()
+        
+    except Exception as e:
+        st.error(f"❌ Could not create Snowpark session: {str(e)}")
+        st.info("💡 Please check your Snowflake connection parameters")
+        st.stop()
 
     prompt = st.text_input(
-        "💬 Enter your query:",
+        "💬 Enter your query:", 
         value="Any goggles review?",
         placeholder="e.g., What do customers say about goggles?"
     )
 
     if prompt:
         if st.button("🔎 Run Query", type="primary"):
-            with st.spinner("Searching reviews..."):
+            with st.spinner("🔍 Searching..."):
 
                 try:
-                    safe_prompt = prompt.replace("'", "''")
-                    keywords = safe_prompt.lower().split()
-                    conditions = " OR ".join([f"LOWER(REVIEW_TEXT) LIKE '%{k}%'" for k in keywords])
+                    # Use Snowpark Root() to access Cortex Search Service
+                    root = Root(session_sp)
 
-                    search_sql = f"""
-                        SELECT 
-                            REVIEW_TEXT,
-                            PRODUCT,
-                            SENTIMENT_SCORE
-                        FROM REVIEWS_WITH_SENTIMENT
-                        WHERE {conditions}
-                        LIMIT 20;
-                    """
+                    svc = (
+                        root
+                        .databases["AITECHSKILL_DB"]
+                        .schemas["AITECHSKILL_SCHEMA"]
+                        .cortex_search_services["AITECHSKILL_SEARCH_SERVICE"]
+                    )
 
-                    search_df = session.sql(search_sql)
+                    resp = svc.search(
+                        query=prompt,
+                        columns=["CHUNK", "FILE_NAME", "SENTIMENT_SCORE"],
+                        limit=5
+                    ).to_json()
 
-                    if len(search_df) == 0:
-                        st.warning("No matching reviews found.")
-                    else:
-                        st.success(f"Found {len(search_df)} matching reviews")
+                    json_conv = json.loads(resp)
+                    search_df = pd.json_normalize(json_conv["results"])
+
+                    if len(search_df) > 0:
+                        st.success(f"✅ Found {len(search_df)} relevant results")
 
                         for idx, row in search_df.iterrows():
-                            st.markdown(f"### Result {idx + 1}")
-                            st.info(row["REVIEW_TEXT"])
-                            st.caption(f"📦 Product: {row['PRODUCT']}")
-                            st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
-                            st.write("---")
+                            with st.container():
+                                st.markdown(f"### Result {idx + 1}")
+                                st.info(row["CHUNK"])
 
-                        context = "\n".join(
-                            f"- {r['REVIEW_TEXT']}" for _, r in search_df.iterrows()
-                        ).replace("'", "''")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.caption(f"📦 Product: {row['FILE_NAME']}")
+                                with col2:
+                                    st.caption(f"😊 Sentiment: {row['SENTIMENT_SCORE']:.2f}")
 
-                        full_prompt = f"""
-You are a helpful AI assistant. Use the customer review context below to answer the question.
-
-<context>
-{context}
-</context>
-
-<question>
-{safe_prompt}
-</question>
-
-Provide a clear, concise answer.
-"""
-
-                        qa_sql = f"""
-                            SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                                'claude-3-5-sonnet',
-                                $$ {full_prompt} $$
-                            ) AS ANSWER;
-                        """
-
-                        answer_df = session.sql(qa_sql)
-                        st.subheader("🤖 AI Summary")
-                        st.success(answer_df["ANSWER"].iloc[0])
+                                st.markdown("---")
+                    else:
+                        st.warning("No results found. Try a different query.")
 
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    st.error(f"❌ Error during search: {str(e)}")
 
-
-    # AI-Powered Q&A
+    # AI-Powered Q&A Section
     st.markdown("---")
     st.subheader("💬 AI-Powered Q&A")
     
@@ -384,6 +379,3 @@ Provide a clear, insightful answer based on the data.'
                 
             except Exception as e:
                 st.error(f"❌ Error generating AI response: {str(e)}")
-
-st.markdown("---")
-st.caption("🚀 Powered by Snowflake Cortex AI | Built with Streamlit")
