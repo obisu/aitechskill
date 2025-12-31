@@ -22,6 +22,28 @@ st.write("This is your GenAI-powered data processing app.")
 # SNOWFLAKE CONNECTION USING ENVIRONMENT VARIABLES
 # ============================================================================
 
+# Define SessionWrapper OUTSIDE the function so it's accessible everywhere
+class SessionWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+    
+    def sql(self, query):
+        """Execute SQL and return as pandas DataFrame"""
+        cur = self.conn.cursor()
+        try:
+            cur.execute(query)
+            rows = cur.fetchall()
+            cols = [c[0] for c in cur.description]
+            df = pd.DataFrame(rows, columns=cols)
+            return df
+        finally:
+            cur.close()
+    
+    def close(self):
+        """Close the connection"""
+        self.conn.close()
+
+
 @st.cache_resource
 def get_snowflake_session():
     """Create Snowflake connection from environment variables"""
@@ -34,27 +56,6 @@ def get_snowflake_session():
             database=os.getenv("SNOWFLAKE_DATABASE"),
             schema=os.getenv("SNOWFLAKE_SCHEMA"),
         )
-        
-        # Session wrapper to mimic Snowpark-style .sql().to_pandas()
-        class SessionWrapper:
-            def __init__(self, conn):
-                self.conn = conn
-            
-            def sql(self, query):
-                """Execute SQL and return as pandas DataFrame"""
-                cur = self.conn.cursor()
-                try:
-                    cur.execute(query)
-                    rows = cur.fetchall()
-                    cols = [c[0] for c in cur.description]
-                    df = pd.DataFrame(rows, columns=cols)
-                    return df
-                finally:
-                    cur.close()
-            
-            def close(self):
-                """Close the connection"""
-                self.conn.close()
         
         return SessionWrapper(conn)
     
@@ -256,8 +257,8 @@ with tab3:
     st.title("🔍 RAG App - Smart Review Search (Avalanche Style)")
     st.markdown("Ask questions about your product reviews")
 
-    # IMPORTANT: Use the same connector session as Avalanche
-    session = SessionWrapper(conn)
+    # Use the session that was already created at the top of the file
+    # No need to recreate it here!
 
     prompt = st.text_input(
         "💬 Enter your query:",
