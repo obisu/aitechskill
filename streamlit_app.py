@@ -293,8 +293,7 @@ with tab3:
                                 input => PARSE_JSON(
                                     SNOWFLAKE.CORTEX.SEARCH_PREVIEW(
                                         'AITECHSKILL_SEARCH_SERVICE',
-                                        '{safe_prompt}',
-                                        5
+                                        '{safe_prompt}'
                                     )
                                 ):results
                             )
