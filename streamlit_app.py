@@ -23,6 +23,7 @@ st.write("This is your GenAI-powered data processing app.")
 # ============================================================================
 
 # Define SessionWrapper OUTSIDE the function so it's accessible everywhere
+# Update the SessionWrapper class at the top of your file
 class SessionWrapper:
     def __init__(self, conn):
         self.conn = conn
@@ -32,17 +33,22 @@ class SessionWrapper:
         cur = self.conn.cursor()
         try:
             cur.execute(query)
-            rows = cur.fetchall()
-            cols = [c[0] for c in cur.description]
-            df = pd.DataFrame(rows, columns=cols)
-            return df
+            
+            # Check if this is a SELECT query
+            if cur.description:
+                rows = cur.fetchall()
+                cols = [c[0] for c in cur.description]
+                df = pd.DataFrame(rows, columns=cols)
+                return df
+            else:
+                # For non-SELECT queries (USE, CREATE, etc.)
+                return None
         finally:
             cur.close()
     
     def close(self):
         """Close the connection"""
         self.conn.close()
-
 
 @st.cache_resource
 def get_snowflake_session():
@@ -252,7 +258,6 @@ with tab2:
 # ============================================================================
 # TAB 3: RAG App with Cortex Search
 # ============================================================================
-
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
@@ -272,14 +277,14 @@ with tab3:
                     # Escape prompt for SQL
                     safe_prompt = prompt.replace("'", "''")
                     
-                    # Correct syntax for Cortex Search Service
+                    # Use fully qualified name with !SEARCH
                     search_sql = f"""
                         SELECT 
                             FILE_NAME,
                             CHUNK,
                             DISTANCE
                         FROM TABLE(
-                            AITECHSKILL_SEARCH_SERVICE!SEARCH(
+                            AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE!SEARCH(
                                 QUERY => '{safe_prompt}',
                                 MAX_RESULTS => 5
                             )
@@ -338,8 +343,52 @@ Provide a clear, helpful answer based on the information found.
 
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
-                    import traceback
-                    st.code(traceback.format_exc())
+                    
+                    # Let's try to set the context and retry
+                    st.info("💡 Trying with explicit USE statements...")
+                    try:
+                        # Set database and schema context
+                        session.sql("USE DATABASE AITECHSKILL_DB").collect()
+                        session.sql("USE SCHEMA AITECHSKILL_SCHEMA").collect()
+                        
+                        # Now try the search again with short name
+                        retry_sql = f"""
+                            SELECT 
+                                FILE_NAME,
+                                CHUNK,
+                                DISTANCE
+                            FROM TABLE(
+                                AITECHSKILL_SEARCH_SERVICE!SEARCH(
+                                    QUERY => '{safe_prompt}',
+                                    MAX_RESULTS => 5
+                                )
+                            )
+                        """
+                        
+                        search_df = session.sql(retry_sql)
+                        
+                        if len(search_df) > 0:
+                            st.success(f"✅ Found {len(search_df)} relevant results")
+
+                            for idx, row in search_df.iterrows():
+                                with st.container():
+                                    st.markdown(f"### Result {idx + 1}")
+                                    st.info(row["CHUNK"])
+
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.caption(f"📦 File: {row['FILE_NAME']}")
+                                    with col2:
+                                        st.caption(f"🎯 Relevance Score: {row['DISTANCE']:.4f}")
+
+                                    st.markdown("---")
+                        else:
+                            st.warning("No results found.")
+                            
+                    except Exception as e2:
+                        st.error(f"❌ Retry also failed: {str(e2)}")
+                        import traceback
+                        st.code(traceback.format_exc())
 
     # Additional AI-Powered Q&A Section
     st.markdown("---")
@@ -354,6 +403,10 @@ Provide a clear, helpful answer based on the information found.
     if qa_question and st.button("🤖 Get AI Answer", type="secondary", key="tab3_qa_button"):
         with st.spinner("🤔 Generating answer..."):
             try:
+                # Set context first
+                session.sql("USE DATABASE AITECHSKILL_DB")
+                session.sql("USE SCHEMA AITECHSKILL_SCHEMA")
+                
                 # First, search for relevant reviews
                 safe_qa = qa_question.replace("'", "''")
                 
