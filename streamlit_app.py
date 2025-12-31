@@ -250,32 +250,100 @@ with tab2:
     st.altair_chart(hist_chart, use_container_width=True)
 
 # ============================================================================
-# TAB 3: RAG App with SQL-based Search
+# TAB 3: RAG App with Cortex Search
 # ============================================================================
 
 with tab3:
     st.title("🔍 RAG App - Search Reviews")
     st.markdown("Ask questions about your product reviews")
-    
-    # Diagnostic: Check if Cortex Search Service exists
-    with st.expander("🔧 Diagnostic: Check Search Service"):
-        if st.button("Check Search Service", key="check_service"):
-            try:
-                check_sql = """
-                SHOW CORTEX SEARCH SERVICES IN SCHEMA AITECHSKILL_DB.AITECHSKILL_SCHEMA
-                """
-                services_df = session.sql(check_sql)
-                if len(services_df) > 0:
-                    st.success(f"✅ Found {len(services_df)} Cortex Search Service(s)")
-                    st.dataframe(services_df, use_container_width=True)
-                else:
-                    st.warning("⚠️ No Cortex Search Services found in this schema")
-            except Exception as e:
-                st.error(f"❌ Error checking services: {str(e)}")
 
-    # AI-Powered Q&A Section
+    prompt = st.text_input(
+        "💬 Enter your query:", 
+        value="Any goggles review?",
+        placeholder="e.g., What do customers say about goggles?",
+        key="tab3_search_prompt"
+    )
+
+    if prompt:
+        if st.button("🔎 Run Query", type="primary", key="tab3_search_button"):
+            with st.spinner("🔍 Searching..."):
+
+                try:
+                    # Escape prompt for SQL
+                    safe_prompt = prompt.replace("'", "''")
+                    
+                    # Use Cortex Search - the service returns results directly
+                    search_sql = f"""
+                        SELECT 
+                            FILE_NAME,
+                            CHUNK,
+                            DISTANCE
+                        FROM TABLE(
+                            AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE(
+                                QUERY => '{safe_prompt}',
+                                MAX_RESULTS => 5
+                            )
+                        )
+                    """
+                    
+                    search_df = session.sql(search_sql)
+
+                    if len(search_df) > 0:
+                        st.success(f"✅ Found {len(search_df)} relevant results")
+
+                        for idx, row in search_df.iterrows():
+                            with st.container():
+                                st.markdown(f"### Result {idx + 1}")
+                                st.info(row["CHUNK"])
+
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.caption(f"📦 File: {row['FILE_NAME']}")
+                                with col2:
+                                    st.caption(f"🎯 Relevance Score: {row['DISTANCE']:.4f}")
+
+                                st.markdown("---")
+                        
+                        # Now get AI summary of results
+                        st.markdown("---")
+                        st.subheader("🤖 AI Summary of Results")
+                        
+                        # Combine all chunks as context
+                        context = "\n\n".join([
+                            f"From {row['FILE_NAME']}:\n{row['CHUNK']}" 
+                            for _, row in search_df.iterrows()
+                        ]).replace("'", "''")
+                        
+                        summary_prompt = f"""
+Based on the following search results, provide a concise summary answering the user's question: "{safe_prompt}"
+
+Search Results:
+{context}
+
+Provide a clear, helpful answer based on the information found.
+"""
+                        
+                        ai_query = f"""
+                            SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                                'claude-3-5-sonnet',
+                                $${summary_prompt}$$
+                            ) AS response
+                        """
+                        
+                        response_df = session.sql(ai_query)
+                        st.success(response_df['RESPONSE'].iloc[0])
+                        
+                    else:
+                        st.warning("No results found. Try a different query.")
+
+                except Exception as e:
+                    st.error(f"❌ Error during search: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+    # Additional AI-Powered Q&A Section (using REVIEWS_WITH_SENTIMENT table)
     st.markdown("---")
-    st.subheader("💬 AI-Powered Q&A")
+    st.subheader("💬 AI-Powered Q&A (Direct Review Analysis)")
     
     qa_question = st.text_area(
         "Ask a question about your reviews:",
@@ -286,46 +354,62 @@ with tab3:
     if qa_question and st.button("🤖 Get AI Answer", type="secondary", key="tab3_qa_button"):
         with st.spinner("🤔 Generating answer..."):
             try:
-                context_query = """
-                SELECT 
-                    PRODUCT,
-                    REVIEW_TEXT,
-                    SENTIMENT_SCORE
-                FROM REVIEWS_WITH_SENTIMENT
-                LIMIT 20
+                # First, search for relevant reviews
+                safe_qa = qa_question.replace("'", "''")
+                
+                search_reviews_sql = f"""
+                    SELECT 
+                        FILE_NAME,
+                        CHUNK
+                    FROM TABLE(
+                        AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE(
+                            QUERY => '{safe_qa}',
+                            MAX_RESULTS => 10
+                        )
+                    )
                 """
-                context_df = session.sql(context_query)
                 
-                context_text = "\n".join([
-                    f"Product: {row['PRODUCT']}, Review: {row['REVIEW_TEXT'][:150]}, Sentiment: {row['SENTIMENT_SCORE']:.2f}"
-                    for _, row in context_df.iterrows()
-                ])
+                context_df = session.sql(search_reviews_sql)
                 
-                context_text = context_text.replace("'", "''")
-                qa_question_escaped = qa_question.replace("'", "''")
-                
-                ai_query = f"""
-                SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                    'claude-3-5-sonnet',
-                    'You are a helpful data analyst. Answer this question about customer reviews:
+                if len(context_df) > 0:
+                    context_text = "\n\n".join([
+                        f"Review from {row['FILE_NAME']}:\n{row['CHUNK']}" 
+                        for _, row in context_df.iterrows()
+                    ]).replace("'", "''")
                     
-Question: {qa_question_escaped}
+                    qa_prompt = f"""
+You are a helpful data analyst. Answer this question about customer reviews:
 
-Sample Reviews:
+Question: {safe_qa}
+
+Relevant Reviews:
 {context_text}
 
-Provide a clear, insightful answer based on the data.'
-                ) AS response
-                """
-                
-                response_df = session.sql(ai_query)
-                response = response_df['RESPONSE'].iloc[0]
-                
-                st.markdown("### 🤖 AI Response:")
-                st.success(response)
+Provide a clear, insightful answer based on the data. Include specific examples from the reviews when relevant.
+"""
+                    
+                    ai_query = f"""
+                        SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                            'claude-3-5-sonnet',
+                            $${qa_prompt}$$
+                        ) AS response
+                    """
+                    
+                    response_df = session.sql(ai_query)
+                    response = response_df['RESPONSE'].iloc[0]
+                    
+                    st.markdown("### 🤖 AI Response:")
+                    st.success(response)
+                    
+                    with st.expander("📄 View source reviews"):
+                        st.dataframe(context_df, use_container_width=True)
+                else:
+                    st.warning("No relevant reviews found for your question.")
                 
             except Exception as e:
                 st.error(f"❌ Error generating AI response: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
 
 st.markdown("---")
 st.caption("🚀 Powered by Snowflake Cortex AI | Built with Streamlit")
