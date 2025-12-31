@@ -256,7 +256,7 @@ with tab2:
     st.altair_chart(hist_chart, use_container_width=True)
 
 # ============================================================================
-# TAB 3: RAG App with Cortex Search
+# TAB 3: RAG App - Search Reviews (using CHUNKED_CONTENT table)
 # ============================================================================
 
 with tab3:
@@ -264,7 +264,7 @@ with tab3:
     st.markdown("Ask questions about your product reviews")
 
     prompt = st.text_input(
-        "💬 Enter your query:", 
+        "💬 Enter your query:",
         value="Any goggles review?",
         placeholder="e.g., What do customers say about goggles?",
         key="tab3_search_prompt"
@@ -275,59 +275,55 @@ with tab3:
             with st.spinner("🔍 Searching..."):
 
                 try:
-                    # Set database and schema context first
+                    # Set database and schema context
                     session.sql("USE DATABASE AITECHSKILL_DB")
                     session.sql("USE SCHEMA AITECHSKILL_SCHEMA")
-                    
-                    # Escape prompt for SQL
+
+                    # Basic escaping for quotes in SQL
                     safe_prompt = prompt.replace("'", "''")
-                    
-                    # Correct Cortex Search Service syntax - using SNOWFLAKE.CORTEX.SEARCH
-                   
-                    search_sql = f"""
-                        SELECT 
-                            PARSE_JSON(value):file_name::STRING AS FILE_NAME,
-                            PARSE_JSON(value):chunk::STRING AS CHUNK,
-                            PARSE_JSON(value):distance::FLOAT AS DISTANCE
-                        FROM TABLE(
-                            FLATTEN(
-                                input => PARSE_JSON(
-                                    SYSTEM$CORTEX_SEARCH_QUERY('{safe_prompt}')
-                                    )
-                                ):results
-                            )
-                        )
-                    """
-                    
-                    search_df = session.sql(search_sql)
+                    keywords = safe_prompt.lower().split()
 
-                    if search_df is not None and len(search_df) > 0:
-                        st.success(f"✅ Found {len(search_df)} relevant results")
+                    # Build LIKE conditions for each keyword (up to first 3)
+                    like_conditions = " OR ".join([
+                        f"LOWER(CHUNK) LIKE '%{kw}%'" for kw in keywords[:3]
+                    ])
 
-                        for idx, row in search_df.iterrows():
-                            with st.container():
-                                st.markdown(f"### Result {idx + 1}")
-                                st.info(row["CHUNK"])
+                    # If no usable keywords (e.g., empty after split), avoid invalid SQL
+                    if not like_conditions:
+                        st.warning("Please enter a more specific query.")
+                    else:
+                        search_sql = f"""
+                            SELECT
+                                FILE_NAME,
+                                CHUNK
+                            FROM AITECHSKILL_DB.AITECHSKILL_SCHEMA.CHUNKED_CONTENT
+                            WHERE {like_conditions}
+                            LIMIT 10
+                        """
 
-                                col1, col2 = st.columns(2)
-                                with col1:
+                        search_df = session.sql(search_sql)
+
+                        if search_df is not None and len(search_df) > 0:
+                            st.success(f"✅ Found {len(search_df)} matching results")
+
+                            # Show retrieved chunks
+                            for idx, row in search_df.iterrows():
+                                with st.container():
+                                    st.markdown(f"### Result {idx + 1}")
+                                    st.info(row["CHUNK"])
                                     st.caption(f"📦 File: {row['FILE_NAME']}")
-                                with col2:
-                                    if pd.notna(row['DISTANCE']):
-                                        st.caption(f"🎯 Relevance: {row['DISTANCE']:.4f}")
+                                    st.markdown("---")
 
-                                st.markdown("---")
-                        
-                        # Get AI summary
-                        st.markdown("---")
-                        st.subheader("🤖 AI Summary of Results")
-                        
-                        context = "\n\n".join([
-                            f"From {row['FILE_NAME']}:\n{row['CHUNK']}" 
-                            for _, row in search_df.iterrows()
-                        ]).replace("'", "''")
-                        
-                        summary_prompt = f"""
+                            # Build context for AI summary
+                            st.markdown("---")
+                            st.subheader("🤖 AI Summary of Results")
+
+                            context = "\n\n".join([
+                                f"From {row['FILE_NAME']}:\n{row['CHUNK']}"
+                                for _, row in search_df.iterrows()
+                            ]).replace("'", "''")
+
+                            summary_prompt = f"""
 Based on the following search results, provide a concise summary answering the user's question: "{safe_prompt}"
 
 Search Results:
@@ -335,87 +331,27 @@ Search Results:
 
 Provide a clear, helpful answer based on the information found.
 """
-                        
-                        ai_query = f"""
-                            SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                                'claude-3-5-sonnet',
-                                $${summary_prompt}$$
-                            ) AS response
-                        """
-                        
-                        response_df = session.sql(ai_query)
-                        if response_df is not None and len(response_df) > 0:
-                            st.success(response_df['RESPONSE'].iloc[0])
-                        
-                    else:
-                        st.warning("No results found. Try a different query.")
+
+                            ai_query = f"""
+                                SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                                    'claude-3-5-sonnet',
+                                    $${summary_prompt}$$
+                                ) AS RESPONSE
+                            """
+
+                            response_df = session.sql(ai_query)
+                            if response_df is not None and len(response_df) > 0:
+                                st.success(response_df['RESPONSE'].iloc[0])
+                            else:
+                                st.warning("AI was unable to generate a summary.")
+                        else:
+                            st.warning("No results found. Try a different query.")
 
                 except Exception as e:
                     st.error(f"❌ Error during search: {str(e)}")
                     import traceback
                     st.code(traceback.format_exc())
-                    
-                    st.info("💡 Trying direct table query as fallback...")
-                    
-                    # Fallback: Query the source table directly
-                    try:
-                        safe_prompt = prompt.replace("'", "''")
-                        keywords = safe_prompt.lower().split()
-                        
-                        # Build LIKE conditions for each keyword
-                        like_conditions = " OR ".join([
-                            f"LOWER(CHUNK) LIKE '%{kw}%'" for kw in keywords[:3]  # Use first 3 keywords
-                        ])
-                        
-                        fallback_sql = f"""
-                            SELECT 
-                                FILE_NAME,
-                                CHUNK
-                            FROM AITECHSKILL_DB.AITECHSKILL_SCHEMA.CHUNKED_CONTENT
-                            WHERE {like_conditions}
-                            LIMIT 10
-                        """
-                        
-                        fallback_df = session.sql(fallback_sql)
-                        
-                        if fallback_df is not None and len(fallback_df) > 0:
-                            st.success(f"✅ Found {len(fallback_df)} matching results (using direct query)")
-                            
-                            for idx, row in fallback_df.iterrows():
-                                st.markdown(f"### Result {idx + 1}")
-                                st.info(row["CHUNK"])
-                                st.caption(f"📦 File: {row['FILE_NAME']}")
-                                st.markdown("---")
-                            
-                            # AI summary for fallback results
-                            context = "\n\n".join([
-                                f"From {row['FILE_NAME']}:\n{row['CHUNK']}" 
-                                for _, row in fallback_df.iterrows()
-                            ]).replace("'", "''")
-                            
-                            summary_prompt = f"""
-Based on the following search results, answer: "{prompt}"
 
-Results:
-{context}
-"""
-                            
-                            ai_query = f"""
-                                SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                                    'claude-3-5-sonnet',
-                                    $${summary_prompt}$$
-                                ) AS response
-                            """
-                            
-                            response_df = session.sql(ai_query)
-                            if response_df is not None:
-                                st.subheader("🤖 AI Summary")
-                                st.success(response_df['RESPONSE'].iloc[0])
-                        else:
-                            st.warning("No results found in direct query either.")
-                            
-                    except Exception as fallback_error:
-                        st.error(f"❌ Fallback query also failed: {str(fallback_error)}")
 
     # Additional AI-Powered Q&A Section
     st.markdown("---")
