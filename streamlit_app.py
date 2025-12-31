@@ -272,14 +272,14 @@ with tab3:
                     # Escape prompt for SQL
                     safe_prompt = prompt.replace("'", "''")
                     
-                    # Use Cortex Search - the service returns results directly
+                    # Correct syntax for Cortex Search Service
                     search_sql = f"""
                         SELECT 
                             FILE_NAME,
                             CHUNK,
                             DISTANCE
                         FROM TABLE(
-                            AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE(
+                            AITECHSKILL_SEARCH_SERVICE!SEARCH(
                                 QUERY => '{safe_prompt}',
                                 MAX_RESULTS => 5
                             )
@@ -341,7 +341,7 @@ Provide a clear, helpful answer based on the information found.
                     import traceback
                     st.code(traceback.format_exc())
 
-    # Additional AI-Powered Q&A Section (using REVIEWS_WITH_SENTIMENT table)
+    # Additional AI-Powered Q&A Section
     st.markdown("---")
     st.subheader("💬 AI-Powered Q&A (Direct Review Analysis)")
     
@@ -362,7 +362,7 @@ Provide a clear, helpful answer based on the information found.
                         FILE_NAME,
                         CHUNK
                     FROM TABLE(
-                        AITECHSKILL_DB.AITECHSKILL_SCHEMA.AITECHSKILL_SEARCH_SERVICE(
+                        AITECHSKILL_SEARCH_SERVICE!SEARCH(
                             QUERY => '{safe_qa}',
                             MAX_RESULTS => 10
                         )
