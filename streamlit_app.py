@@ -323,14 +323,9 @@ with tab3:
                                 for _, row in search_df.iterrows()
                             ]).replace("'", "''")
 
-                            summary_prompt = f"""
-Based on the following search results, provide a concise summary answering the user's question: "{safe_prompt}"
-
-Search Results:
-{context}
-
-Provide a clear, helpful answer based on the information found.
-"""
+                            summary_prompt = f""" Based on the following search results, provide a concise summary answering the user's question: "{safe_prompt}"
+                            Search Results:{context} Provide a clear, helpful answer based on the information found.
+                            """
 
                             ai_query = f"""
                                 SELECT SNOWFLAKE.CORTEX.COMPLETE(
